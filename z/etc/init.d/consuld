@@ -1,0 +1,101 @@
+#!/bin/bash
+
+## Server mode or client mode? [ server | client | bootstrap ]
+Comm=$1
+
+rule="client"
+bind_nic="eth1"
+
+
+bind_ip=`ifconfig $bind_nic |grep "inet addr" | awk '{print $2}' |awk -F ':'  '{print $2}'`
+
+	if [[ $bind_ip = "" ]];then
+		bind_option=""
+	else
+		bind_option="-bind $bind_ip"
+	fi
+
+## Cluster setting
+start_join="192.168.133.21,192.168.133.22"
+
+## Default dir & file
+consul_bin="/data/bin/consul"
+TargetDir="/tmp/config.json"
+encrypt="FOLLOW_THE_BOOTSTRAP_ENCRYPT"
+
+	## checks for server or not
+	if [[ $rule = "server" ]] || [[ $rule = "bootstrap" ]] ;then
+		server=true
+			if [[ $rule = "bootstrap" ]];then
+				bootstrap=true
+					if [[ ! -f /data/var/consul_key ]];then
+						$consul_bin keygen > /data/var/consul_key
+					fi
+				encrypt=`cat /data/var/consul_key`
+				CopyDir="/data/z/etc/consuld/bootstrap/"
+			else
+				CopyDir="/data/z/etc/consuld/server/"
+				bootstrap=false
+			fi
+		sed -i "s/client/server/g" /data/z/etc/init/consul.conf  2> /dev/null
+	else
+		CopyDir="/data/z/etc/consuld/client/"
+		server=false
+		sed -i "s/server/client/g" /data/z/etc/init/consul.conf 2> /dev/null
+	fi
+
+
+## Creat conf dir
+mkdir -p $CopyDir 2> /dev/null
+
+## Default information
+datacenter="lgcns"
+log_level="INFO"
+enable_syslog=true
+
+## Parsing
+Join=`echo $start_join |sed -e s/,/\",\"/g -e s/^/\"/g -e s/$/\"/g`
+
+
+## Exoprt to JSON
+echo "{" > $TargetDir
+	if [[ $rule != "client" ]];then
+		echo "    \"bootstrap\": $bootstrap," >> $TargetDir
+	fi
+echo "    \"server\": $server," >> $TargetDir
+echo "    \"datacenter\": \"$datacenter\"," >> $TargetDir
+echo "    \"data_dir\": \"/var/consul\"," >> $TargetDir
+	if [[ $rule = "client" ]];then
+		echo "    \"ui_dir\": \"/home/consul/dist\"," >> $TargetDir
+	fi
+echo "    \"encrypt\": \"$encrypt\"," >> $TargetDir
+echo "    \"log_level\": \"$log_level\"," >> $TargetDir
+	if [[ $rule != "bootstrap" ]];then
+		echo "    \"start_join\": [$Join]," >> $TargetDir
+	fi
+echo "    \"enable_syslog\": $enable_syslog" >> $TargetDir
+
+echo "}" >> $TargetDir
+
+
+## Copy to conf dir
+sudo cp $TargetDir $CopyDir
+
+	case $Comm in
+		start) 	
+			sudo -u consul /data/bin/consul agent -config-dir /etc/consuld/$rule $bind_option & 
+			echo " -- consul $rule has been started --"
+			echo " -- Consul encrypt key is...[ $encrypt ] -- ";;
+			
+		stop)
+			ps aux |grep consul |grep "agent" | fgrep -v "grep" | awk '{print $2}' |xargs kill -9 
+			echo " -- consul $rule has been stopped --" ;;
+		restart) 
+			ps aux |grep consul |grep "agent" | fgrep -v "grep"
+			ps aux |grep consul |grep "agent" | fgrep -v "grep" | awk '{print $2}' |xargs kill -9
+			sudo -u consul /data/bin/consul agent -config-dir /etc/consuld/$rule $bind_option &
+			echo " -- consul $rule has been restarted --" 
+			echo " -- Consul encrypt key is...[ $encrypt ] -- ";;
+	esac
+
+#$Comm consul
